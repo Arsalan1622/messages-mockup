@@ -6,8 +6,9 @@ name: Build Messages mockup APK
 #
 # Release signing needs these repo secrets (see keystore-backup/ locally):
 #   ANDROID_KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD
-# Without them the release APK is built UNSIGNED (installable only after
-# signing with apksigner) — CI still runs tests + build.
+# Without them the build FAILS at the "Verify APK signature" step — an
+# unsigned APK must never be shipped (v1.0 shipped unsigned once, because
+# keystore.properties was written to the repo root instead of android/).
 on:
   push:
     branches: [main, master]
@@ -44,20 +45,23 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
-      # NOTE: the condition must read the secret directly. A previous version
-      # used `if: env.ANDROID_KEYSTORE_BASE64 != ''`, but a step's own env is
-      # NOT visible to its `if` condition, so the step was silently skipped
-      # and v1.0 shipped UNSIGNED. Never use env.* in this step's `if`.
+      # NOTE: both files MUST go under android/ — the Gradle root project is
+      # android/, so build.gradle.kts reads rootProject.file("keystore.properties")
+      # as android/keystore.properties. Writing them to the repo root silently
+      # produces an UNSIGNED APK (that is exactly how v1.0 shipped unsigned).
+      # NOTE 2: the `secrets` context is NOT allowed in an `if` condition
+      # (GitHub rejects the whole workflow file), so the env-based condition
+      # below is the correct one — it works (run #4 proved the step runs).
       - name: Decode release keystore
-        if: secrets.ANDROID_KEYSTORE_BASE64 != ''
+        if: env.ANDROID_KEYSTORE_BASE64 != ''
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > messages-mockup-release.keystore
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/messages-mockup-release.keystore
           printf 'storeFile=messages-mockup-release.keystore\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
             "${{ secrets.KEYSTORE_PASSWORD }}" \
             "${{ secrets.KEY_ALIAS }}" \
-            "${{ secrets.KEY_PASSWORD }}" > keystore.properties
+            "${{ secrets.KEY_PASSWORD }}" > android/keystore.properties
 
       - name: Install dependencies
         run: flutter pub get
@@ -73,7 +77,8 @@ jobs:
         run: flutter build apk --release
 
       # Fail loudly if the APK is unsigned — never ship an unsigned release
-      # again (v1.0 shipped unsigned because the keystore step was skipped).
+      # again (v1.0 shipped unsigned because keystore.properties landed in
+      # the repo root instead of android/).
       - name: Verify APK signature
         run: |
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
