@@ -44,8 +44,12 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
+      # NOTE: the condition must read the secret directly. A previous version
+      # used `if: env.ANDROID_KEYSTORE_BASE64 != ''`, but a step's own env is
+      # NOT visible to its `if` condition, so the step was silently skipped
+      # and v1.0 shipped UNSIGNED. Never use env.* in this step's `if`.
       - name: Decode release keystore
-        if: env.ANDROID_KEYSTORE_BASE64 != ''
+        if: secrets.ANDROID_KEYSTORE_BASE64 != ''
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -67,6 +71,15 @@ jobs:
 
       - name: Build release APK
         run: flutter build apk --release
+
+      # Fail loudly if the APK is unsigned — never ship an unsigned release
+      # again (v1.0 shipped unsigned because the keystore step was skipped).
+      - name: Verify APK signature
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APKSIGNER=$(ls "$SDK"/build-tools/*/apksigner 2>/dev/null | head -n 1)
+          if [ -z "$APKSIGNER" ]; then echo "apksigner not found under $SDK"; exit 1; fi
+          "$APKSIGNER" verify build/app/outputs/flutter-apk/app-release.apk && echo "APK signature verified"
 
       - name: Name the APK
         run: |
